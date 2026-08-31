@@ -143,30 +143,30 @@ supaya bisa ditukar balik.
 
 ## 4. Fase
 
-### Fase 0 — Ukur, jangan asumsikan
-- [ ] Ukur ukuran `OrangeFox/bootable/Recovery` dan `OrangeFox/vendor/recovery`
+### Fase 0 — Ukur, jangan asumsikan — **SELESAI**
+- [x] Ukur ukuran `OrangeFox/bootable/Recovery` dan `OrangeFox/vendor/recovery`
       (clone `--depth=1`), lalu hitung kebutuhan nyata
-- [ ] Putuskan A atau B berdasarkan angka itu
+- [x] Putuskan A atau B berdasarkan angka itu
 
 **Selesai bila:** kebutuhan disk diketahui angkanya, bukan diperkirakan.
 
-### Fase 1 — Konversi pohon
-- [ ] `mv bootable/recovery bootable/recovery-twrp` (simpan, jangan hapus)
-- [ ] Clone `OrangeFox/bootable/Recovery.git -b fox_12.1` → `bootable/recovery`
-- [ ] Clone `OrangeFox/vendor/recovery.git -b fox_12.1` → `vendor/recovery`
-- [ ] Terapkan tambalan `update_engine` yang dilakukan sync script v021
+### Fase 1 — Konversi pohon — **SELESAI**
+- [x] `mv bootable/recovery bootable/recovery-twrp` (simpan, jangan hapus)
+- [x] Clone `OrangeFox/bootable/Recovery.git -b fox_12.1` → `bootable/recovery`
+- [x] Clone `OrangeFox/vendor/recovery.git -b fox_12.1` → `vendor/recovery`
+- [x] Terapkan tambalan `update_engine` yang dilakukan sync script v021
 
 **Selesai bila:** `vendor/recovery` ada dan `lunch` menerima produk A37f.
 
-### Fase 2 — Device tree
+### Fase 2 — Device tree — **SELESAI**
 Basisnya device tree TWRP 12.1 kita yang sudah terbukti, BUKAN android-9.0.
 
-- [ ] Salin `device/oppo/A37f` dari `android_build_oppo_A37-twrp`
-- [ ] `prebuilt/Image` ← bangun dari kernel branch `twrp-12.1` (`29cc5a6be0fe`)
-- [ ] Sesuaikan `omni_A37f.mk` ke konvensi penamaan fox_12.1
-- [ ] Baca variabel `OF_*` **dari repo `vendor/recovery` yang baru di-clone**,
-      bukan dari wiki — halaman wiki `dev/building/vars` dirender JS dan tidak
-      bisa diambil apa adanya
+- [x] Salin `device/oppo/A37f` dari `android_build_oppo_A37-twrp`
+- [x] `prebuilt/Image` ← dibangun dari kernel branch `twrp-12.1` (`29cc5a6be0fe`),
+      18.509.176 B
+- [x] `vendorsetup.sh` dibuat, 8 variabel, tiap baris beralasan
+- [x] Variabel dibaca dari `gitlab.com/OrangeFox/infrastructure/doc`
+      `dev/build_vars.md` (968 baris, 07 Agustus 2026), bukan dari wiki
 
 Yang sudah terbukti dan JANGAN diubah tanpa alasan:
 
@@ -178,29 +178,195 @@ recovery.fstab dan twrp.flags -- seluruh alamat sudah diverifikasi terhadap
   tabel partisi perangkat
 ```
 
-### Fase 3 — Ukuran image
-Partisi recovery **33.554.432 byte**. TWRP kita 32.157.696 (sisa 1.396.736).
-OrangeFox lebih besar dari TWRP, jadi ini kendala nyata.
+#### Tiga hambatan yang harus dibereskan, dan sebabnya
 
-Tuas, urut dari yang paling ampuh:
+**1. Modul Soong terdefinisi dua kali.** `mv bootable/recovery
+bootable/recovery-twrp` di Fase 1 tidak cukup — Soong memindai SELURUH pohon,
+jadi kedua pohon mendefinisikan `soong-libaosprecovery_defaults`,
+`soong-libminuitwrp_defaults`, dan `soong-libguitwrp_defaults`.
+
+Solusinya berkas kosong `bootable/recovery-twrp/.find-ignore`. Mekanismenya di
+`build/soong/ui/build/finder.go:53`:
+
+```go
+pruneFiles := []string{".out-dir", ".find-ignore"}
+```
+
+Dipilih ketimbang menghapus pohon TWRP, karena reversibel: tukar nama direktori
+untuk kembali membangun TWRP.
+
+**2. `OF_DEFAULT_KEYMASTER_VERSION` wajib.** `orangefox.mk:646` menolak
+`TW_FORCE_KEYMASTER_VER` tanpa pasangannya. Diisi `4.1`, sama dengan
+`keymaster_ver=4.1` di `omni_A37f.mk:20`. Bedanya TWRP menyetelnya sebagai
+properti produk, OrangeFox saat jalan lewat `twrp.cpp:478`.
+
+**3. `TW_MAX_BRIGHTNESS` wajib.** `orangefox.mk:708` menolak build tanpanya —
+padahal flag ini justru kita CABUT dari TWRP untuk memperbaiki bug kecerahan.
+
+Yang menyelesaikan tanpa mengembalikan bug: `data.cpp:1373-1391` di pohon
+OrangeFox punya struktur sama dengan TWRP — kalau flag tidak ada, ia membaca
+`/sys/class/leds/lcd-backlight/max_brightness` sendiri. Perangkat melaporkan
+**255** (dibaca langsung lewat adb). Jadi `TW_MAX_BRIGHTNESS := 255` menghasilkan
+angka yang PERSIS SAMA dengan deteksi otomatis. Bug lama berasal dari nilai 100
+warisan device tree TWRP 9.0, bukan dari keberadaan flag-nya.
+
+#### Hambatan keempat: sistem build harus ditambal
+
+Build "berhasil" tapi tidak ada zip OrangeFox. Sebabnya
+`vendor/recovery/OrangeFox_A12.sh` tidak dirujuk apa pun di pohon. Skrip itu
+sendiri yang menjelaskan, baris 186-189:
 
 ```
-OF_USE_LZMA_COMPRESSION=1     kernel punya RD_LZMA (RD_LZ4 tidak diset)
-TW_EXTRA_LANGUAGES := false   sudah dipakai di TWRP kita, hemat ~485 KB
-FOX_DRASTIC_SIZE_REDUCTION=1  cadangan terakhir, HARUS setelah export lain
+-- You cannot build OrangeFox without patching build/core/Makefile
+   in the build system. Aborting!
 ```
 
-### Fase 4 — Verifikasi sebelum menyentuh perangkat
-- [ ] Ukuran ≤ 33.554.432
-- [ ] sha256 kernel di dalam image **identik** dengan hasil build sendiri
-- [ ] cmdline memuat keenam `ramoops.*` **dan** `ecc=32`
-- [ ] Pustaka yang dibutuhkan biner recovery lengkap
-- [ ] Blob dekripsi ada: `qseecomd`, `keymaster@4.1`, `libQSEEComAPI`
+Patch resminya ada di `gitlab.com/OrangeFox/sync` → `patches/patch-manifest-fox_12.1.diff`,
+diterapkan `patch -p1` dari direktori `build/` (`build/core` adalah symlink ke
+`make/core`). Ia memasang empat pemanggilan hook di `core/Makefile`, mendefinisikan
+`FOX_VENDOR` di `core/config.mk:616`, dan menambah fungsi di `make/envsetup.sh`.
+Uji kering bersih tanpa fuzz.
+
+Repo yang sama juga memuat `patches/patch-vendor-twrp-fox_12.1.diff`, dan isinya
+**identik** dengan yang dikerjakan manual di Fase 1 — penyisipan
+`include bootable/recovery/orangefox_soong.mk` tepat di atas
+`SOONG_CONFIG_NAMESPACES += twrpVarsPlugin`.
+
+**Selesai bila:** build menghasilkan `.img` dan `.zip`. ✅
+
+### Fase 3 — Ukuran image — **SELESAI**
+Partisi recovery **33.554.432 byte** (`mmcblk0p23`, 32768 KB di `/proc/partitions`).
+
+Perjalanan angkanya:
+
+| Tahap | Ukuran | Sisa |
+|---|---|---|
+| Tanpa pemaketan OrangeFox | 33.521.664 | 32.768 |
+| Dengan pemaketan OrangeFox | 33.933.312 | **−378.880 (GAGAL)** |
+| Setelah nano dibuang | **33.095.680** | **458.752** |
+
+Defisitnya hanya 378 KB, jadi `FOX_DRASTIC_SIZE_REDUCTION` terlalu kasar — ia
+membuang bash, busybox, zstd, lz4, patchelf, gnutar, gnused, fsck.erofs, dan
+FoxFiles/Tools sekaligus (`OrangeFox_A12.sh:869-887`).
+
+Sasaran yang tepat: **nano beserta basis data terminfo-nya**.
+
+```
+system/etc/terminfo   3.124.961 B   hanya berguna untuk nano
+system/bin/nano         175.000 B
+system/etc/nano          51.603 B
+sbin/nano                   527 B
+----------------------------------
+total                 3.352.091 B
+```
+
+nano bukan pilihan kita — ia paket bawaan TWRP di
+`vendor/twrp/config/packages.mk:10`. `FOX_EXCLUDE_NANO_EDITOR=1` menyetel
+`TW_EXCLUDE_NANO := true` (`orangefox.mk:416-417`) sehingga nano tidak dibangun
+sama sekali. Yang hilang hanya editor teks di dalam recovery.
+
+`recovery/root` juga dibersihkan lebih dulu — skrip OrangeFox sendiri yang
+menyarankannya di baris 1383, karena berkas dari build sebelumnya tetap ikut
+masuk ramdisk kalau direktori itu tidak dikosongkan.
+
+Catatan: `TW_EXTRA_LANGUAGES := false` ternyata TIDAK menghapus
+`twres/languages` (masih 2,4 MB). Belum diperlukan, dicatat sebagai cadangan
+kalau nanti ruang mepet lagi.
+
+### Fase 4 — Verifikasi sebelum menyentuh perangkat — **SELESAI**
+- [x] Ukuran 33.095.680 ≤ 33.554.432 (sisa 458.752 B, 98,6% terpakai)
+- [x] sha256 kernel di dalam image **identik** dengan `prebuilt/Image`:
+      `be3c311a623512f426080693c9e6d0cf27bcb71497a263967e55a8ec3d6c1377`
+- [x] Kernel: `3.10.108-lineageos-g29cc5a6be0fe` — persis HEAD `twrp-12.1`
+- [x] cmdline memuat keenam `ramoops.*` **dan** `ecc=32` — byte per byte
+      identik dengan TWRP yang sudah berjalan
+- [x] Semua offset header sama dengan TWRP: `kaddr 0x80008000`,
+      `raddr 0x82000000`, `tags 0x80000100`, `page 2048`
+- [x] Ramdisk terkompresi LZMA (magic `5d 00 00 80`), 43.199.744 → 14.372.172 B
+- [x] Blob dekripsi ada: `qseecomd`, `android.hardware.keymaster@4.1-service`,
+      `vendor/lib/libQSEEComAPI.so`, `keystore2`, `vold_prepare_subdirs`,
+      `libsoftkeymasterdevice.so`, gatekeeper software
+- [x] `recovery.fstab:26` memuat `fileencryption=adiantum:adiantum:v1`
+- [x] `twrp.flags:19` memuat perbaikan `/usb-otg` kita
+- [x] **Tanpa `adb_keys`**, `ro.secure=0`, `ro.debuggable=1` — sesuai
+      ketentuan akses adb terbuka
+- [x] Kedua jalur symlink partisi ada di perangkat: `/dev/block/by-name/recovery`
+      (dipakai installer zip) dan `/dev/block/bootdevice/by-name/recovery`
+      (dipakai fstab kita), keduanya → `mmcblk0p23`
+
+Selisih terhadap ramdisk TWRP yang terbukti jalan, di luar gambar tema:
+
+```
+hilang di OrangeFox : libssh.so, libssl.so, me.twrp.twrpapp.apk, nano, nano.rc
+tambahan            : FFiles/OF_*.zip, decrypt, magiskboot, resetprop, openaes,
+                      mmgui, setgovernor, fox.cfg, ... (perkakas OrangeFox)
+```
+
+Artefak:
+
+```
+OrangeFox-R12.0-Unofficial-A37f.img   33.095.680 B
+  sha256 f7256966ae53ce4ba6bbf13df2765982bf4c5afcdc917adc0cc2dcc718c7ce65
+  md5    dced8e26fa65354141825a781e98f237
+OrangeFox-R12.0-Unofficial-A37f.zip   46.509.654 B
+```
+
+Keduanya sudah disalin ke `/sdcard/` di perangkat (md5 diverifikasi cocok
+setelah transfer) dan ke `/root/los23/share/`.
+
+### Fase 5a — Regresi pertama di perangkat: input & adb — **DIPERBAIKI**
+
+Gejala yang dilaporkan: touchscreen menekan sendiri, dan ada kursor di tengah
+layar. Ditambah adb tidak hidup sama sekali.
+
+**Akar masalahnya satu**: `bootable/recovery` OrangeFox adalah clone BARU, jadi
+lima berkas yang pernah kita perbaiki di pohon TWRP hilang seluruhnya. Ini kelas
+kesalahan yang akan berulang setiap kali pohon recovery diganti.
+
+**Kursor + sentuhan hantu.** `gui.cpp` menggerakkan kursor dari event EV_REL, dan
+kode itu IDENTIK di kedua pohon — jadi bukan di situ bedanya. Bedanya di
+`minuitwrp/events.cpp`. Kompilator menerima:
+
+```
+-DTW_INPUT_BLACKLIST="hbtp_vm,lis3dh-accel,compass,light,proximity"
+```
+
+Tanda kutipnya ikut menjadi bagian makro, sehingga `EXPAND`/`STRINGIFY`
+(`twcommon.h:37-38`) menghasilkan string yang kutipnya ada DI DALAM. Versi
+OrangeFox memecah hanya pada `"\n"`, jadi seluruh daftar tetap satu token
+berikut kutip dan `strcmp` tak pernah cocok — blacklist mati diam-diam.
+Akibatnya `lis3dh-accel` (akselerometer) ikut dibaca dan memancarkan EV_REL
+terus-menerus. Perbaikan kita: lucuti kutip, lalu pecah pada `,` maupun `\n`.
+
+**adb mati.** Empat berkas sisanya, seluruhnya pekerjaan koeksistensi adb+MTP:
+
+```
+etc/init.rc                komposisi awal "mtp,adb", bukan "adb"
+etc/init.recovery.usb.rc   idProduct 4EE2/D001 mengikuti komposisi
+mtp/ffs/MtpDevHandle.cpp   mFd.reset() sebelum open ulang (f_mtp EBUSY)
+partitionmanager.cpp       Release_ADB_FFS() sebelum komposisi diganti
+```
+
+Tiga berkas pertama identik dengan basis TWRP sehingga patch bersih.
+`partitionmanager.cpp` berbeda 1971 baris di OrangeFox, jadi ketiga sisipannya
+dikerjakan manual setelah memastikan semua titik jangkarnya ada.
+
+Terverifikasi di dalam image hasil build:
+
+```
+init.rc:135                    setprop sys.usb.config mtp,adb   (identik TWRP)
+init.recovery.usb.rc:30,38     idProduct 4EE2 / D001
+system/bin/recovery            string "Stopping adbd to release FunctionFS"
+system/lib/libminuitwrp.so     string "hbtp_vm,lis3dh-accel,..."
+```
+
+Ukuran setelah perbaikan: **33.093.632 B**, sisa 460.800 B.
 
 ### Fase 5 — Uji di perangkat
 - [ ] Boot, UI tampil, sentuh normal
 - [ ] **Dekripsi `/data` ber-Adiantum dengan PIN** — ini ujian yang menentukan
 - [ ] adb berfungsi; MTP kalau OrangeFox mendukungnya
+- [ ] Kecerahan: pastikan penuh, bukan 39% seperti bug TWRP lama
 - [ ] `/sys/fs/pstore` terisi setelah panic
 
 ⚠️ TWRP yang sekarang JANGAN ditimpa sampai OrangeFox terbukti. Uji lewat

@@ -1,0 +1,196 @@
+diff --git a/etc/init.rc b/etc/init.rc
+index 5c13ef7..6296f67 100644
+--- a/etc/init.rc
++++ b/etc/init.rc
+@@ -112,8 +112,27 @@ on property:ro.debuggable=1
+     setprop service.adb.root 1
+ 
+ # Always start adbd on userdebug and eng builds
++#
++# A37f: nilai awal langsung "mtp,adb", BUKAN "adb".
++#
++# HANYA baris ini yang diubah. 'on fs' di init.recovery.usb.rc SENGAJA
++# dibiarkan menulis "functions adb" -- percobaan sebelumnya mengubah keduanya
++# sekaligus dan gadget tidak naik sama sekali; menulis komposisi mtp,adb ke
++# sysfs pada tahap 'on fs', sebelum /dev/usb-ffs/adb ter-mount, adalah
++# tersangkanya.
++#
++# Alasan perubahan ini: Enable_MTP() (partitionmanager.cpp) hanya memutar
++# sys.usb.config kalau nilainya BELUM "mtp,adb". Dengan nilai ini disetel
++# sebelum adbd pertama kali berjalan, pergantian komposisi tidak pernah terjadi
++# saat adbd sudah mengikat endpoint -- dan pergantian itulah pemicu kebocoran.
++#
++# Kebocorannya terukur: setelah komposisi berganti, satu berkas epfile (ep1)
++# tetap terbuka tanpa fd mana pun di seluruh sistem, sehingga
++# "ffs: ep0 open DITOLAK: state=2 opened=1" berulang selamanya. io_submit()
++# menahan berkas lewat fget() (fs/aio.c:1110) dan baru melepasnya saat request
++# selesai (:542); antrean baca AIO adbd di ep1 tidak pernah diselesaikan.
+ on fs && property:ro.debuggable=1
+-    setprop sys.usb.config adb
++    setprop sys.usb.config mtp,adb
+ 
+ service fastbootd /system/bin/fastbootd
+     disabled
+diff --git a/etc/init.recovery.usb.rc b/etc/init.recovery.usb.rc
+index 8ef20e0..b683bc4 100644
+--- a/etc/init.recovery.usb.rc
++++ b/etc/init.recovery.usb.rc
+@@ -19,12 +19,23 @@ on property:sys.usb.config=mass_storage,adb
+ 
+ on property:sys.usb.config=mtp,adb
+     write /sys/class/android_usb/android0/enable 0
++    # idProduct WAJIB diganti bersama komposisi. 'on fs' menulis D001, yaitu PID
++    # untuk adb TUNGGAL; Enable_MTP() biasanya menggantinya ke 4EE2
++    # (usb.product.mtpadb, partitionmanager.cpp:2833) saat memutar komposisi.
++    # Karena komposisi kini sudah "mtp,adb" sejak boot, Enable_MTP() melewati
++    # seluruh blok itu -- termasuk penulisan idProduct. Akibatnya perangkat
++    # mengumumkan PID adb-tunggal padahal menyajikan dua antarmuka, dan host
++    # tidak mencocokkan antarmuka adb sama sekali: di PC muncul sebagai TIDAK
++    # TERDETEKSI, bukan offline.
++    write /sys/class/android_usb/android0/idProduct 4EE2
+     write /sys/class/android_usb/android0/functions ${sys.usb.config}
+     write /sys/class/android_usb/android0/enable 1
+     start adbd
+ 
+ on property:sys.usb.config=adb
+     write /sys/class/android_usb/android0/enable 0
++    # Pasangan dari aturan di atas: kembalikan PID adb-tunggal.
++    write /sys/class/android_usb/android0/idProduct D001
+     write /sys/class/android_usb/android0/functions ${sys.usb.config}
+     write /sys/class/android_usb/android0/enable ${service.adb.root}
+     start adbd
+diff --git a/minuitwrp/events.cpp b/minuitwrp/events.cpp
+index e497df6..66b1252 100644
+--- a/minuitwrp/events.cpp
++++ b/minuitwrp/events.cpp
+@@ -247,14 +247,33 @@ static int vk_init(struct ev *e)
+     }
+ #else
+     char* bl = strdup(EXPAND(TW_INPUT_BLACKLIST));
+-    char* blacklist = strtok(bl, "\n");
++    /*
++     * Mekanisme asli menganggap TW_INPUT_BLACKLIST datang lewat Android.mk,
++     * di mana shell melucuti tanda kutipnya sehingga STRINGIFY (twcommon.h:37)
++     * menghasilkan string literal C yang rapi dan "\x0a" menjadi newline saat
++     * kompilasi. Pada basis 12.1 nilainya melewati soong.variables sebagai JSON:
++     * "\x0a" ditolak parser JSON, dan "\n" justru diterjemahkan menjadi newline
++     * SUNGGUHAN yang lalu dilipat preprocessor menjadi satu kata. Hasilnya
++     * '"hbtp_vmlis3dh-accelcompass..."' -- tanpa pemisah dan dengan tanda kutip
++     * ikut di dalam string, sehingga strcmp tidak pernah cocok dan seluruh
++     * blacklist diam-diam tidak berfungsi.
++     *
++     * Karena itu: lucuti tanda kutip yang menempel, lalu pisah pada koma
++     * MAUPUN newline supaya kedua gaya penulisan tetap bekerja.
++     */
++    size_t bl_len = strlen(bl);
++    if (bl_len >= 2 && bl[0] == '"' && bl[bl_len - 1] == '"') {
++        bl[bl_len - 1] = '\0';
++        memmove(bl, bl + 1, bl_len - 1);
++    }
++    char* blacklist = strtok(bl, ",\n");
+ 
+     while (blacklist != NULL) {
+         if (strcmp(e->deviceName, blacklist) == 0) {
+             LOGI("Blacklisting input device: %s\n", blacklist);
+             e->ignored = 1;
+         }
+-        blacklist = strtok(NULL, "\n");
++        blacklist = strtok(NULL, ",\n");
+     }
+     free(bl);
+ #endif
+diff --git a/mtp/ffs/MtpDevHandle.cpp b/mtp/ffs/MtpDevHandle.cpp
+index e22ba55..27b691e 100644
+--- a/mtp/ffs/MtpDevHandle.cpp
++++ b/mtp/ffs/MtpDevHandle.cpp
+@@ -60,6 +60,22 @@ int MtpDevHandle::sendEvent(mtp_event me) {
+ }
+ 
+ int MtpDevHandle::start(bool /* ptp */) {
++	/*
++	 * Konstruktor sudah menyimpan controlFd yang dibuka pemanggil
++	 * (mtp_MtpServer.cpp membukanya dengan O_WRONLY). unique_fd::reset()
++	 * menutup fd lama, TAPI argumennya -- open() di bawah ini -- dievaluasi
++	 * lebih dulu, jadi open kedua terjadi selagi fd pertama masih terbuka.
++	 *
++	 * Driver f_mtp memakai kunci eksklusif: mtp_open() memanggil
++	 * mtp_lock(&_mtp_dev->open_excl) dan mengembalikan -EBUSY kalau perangkat
++	 * sudah terbuka. Akibatnya open kedua selalu gagal dan start() balik -1,
++	 * yang muncul sebagai "Failed to start usb driver!". Terbukti di perangkat:
++	 * membuka /dev/mtp_usb dua kali menghasilkan EBUSY pada yang kedua.
++	 *
++	 * Lepas dulu fd lama, baru buka ulang dengan O_RDWR yang memang dibutuhkan
++	 * MTP untuk membaca maupun menulis.
++	 */
++	mFd.reset();
+ 	mFd.reset(TEMP_FAILURE_RETRY(open(mtp_dev_path, O_RDWR)));
+ 	if (mFd == -1) return -1;
+ 	return 0;
+diff --git a/partitionmanager.cpp b/partitionmanager.cpp
+index ebdc3e7..a3d867a 100755
+--- a/partitionmanager.cpp
++++ b/partitionmanager.cpp
+@@ -3088,6 +3088,45 @@ TWPartition *TWPartitionManager::Get_Default_Storage_Partition()
+ 	return res;
+ }
+ 
++
++#ifdef TW_HAS_MTP
++/*
++ * Lepaskan /dev/usb-ffs/adb/ep0 sebelum komposisi gadget USB diganti.
++ *
++ * android_disable() di drivers/usb/gadget/android.c TIDAK memanggil
++ * functionfs_unbind; ia bergantung pada adbd melepas ep0 sehingga
++ * ffs_ep0_release -> functionfs_closed_callback yang melakukan unbind.
++ * Commit CAF ac76de240429 menyebut ketergantungan ini secara eksplisit.
++ *
++ * Akibatnya adbd tidak pernah menerima FUNCTIONFS_UNBIND dan tidak tahu
++ * gadget dirobohkan -- terbukti di logcat: adbd PID 276 berhenti mencatat
++ * apa pun setelah ENABLE, sementara instance berikutnya gagal terus dengan
++ * "cannot open control endpoint ...: Device or resource busy" karena
++ * ffs_ep0_open() menolak saat atomic_read(&ffs->opened) masih tidak nol.
++ *
++ * "restart adbd" di init TIDAK cukup: stop dan start dijalankan tanpa
++ * menunggu, sehingga proses lama masih memegang ep0 saat yang baru lahir.
++ * Karena itu penghentiannya ditunggu sampai benar-benar selesai di sini.
++ */
++static void Release_ADB_FFS(void) {
++	char state[PROPERTY_VALUE_MAX];
++	property_get("init.svc.adbd", state, "");
++	if (strcmp(state, "running") != 0)
++		return;
++	LOGINFO("Stopping adbd to release FunctionFS ep0\n");
++	property_set("ctl.stop", "adbd");
++	for (int i = 0; i < 50; i++) {
++		usleep(100000);
++		property_get("init.svc.adbd", state, "");
++		if (strcmp(state, "running") != 0) {
++			LOGINFO("adbd stopped after %d ms\n", (i + 1) * 100);
++			return;
++		}
++	}
++	LOGERR("adbd did not stop; USB composition switch may leave adb offline\n");
++}
++#endif
++
+ bool TWPartitionManager::Enable_MTP(void) {
+ #ifdef TW_HAS_MTP
+ 	if (mtppid) {
+@@ -3106,6 +3145,7 @@ bool TWPartitionManager::Enable_MTP(void) {
+ 	property_get("sys.usb.config", old_value, "");
+ 	if (strcmp(old_value, "mtp,adb") != 0) {
+ 		char vendor[PROPERTY_VALUE_MAX];
++		Release_ADB_FFS();
+ 		char product[PROPERTY_VALUE_MAX];
+ 		property_set("sys.usb.config", "none");
+ 		property_get("usb.vendor", vendor, "18D1");
+@@ -3162,6 +3202,9 @@ bool TWPartitionManager::Disable_MTP(void) {
+ 	property_get("sys.usb.config", old_value, "");
+ 	if (strcmp(old_value, "adb") != 0) {
+ 		char vendor[PROPERTY_VALUE_MAX];
++#ifdef TW_HAS_MTP
++		Release_ADB_FFS();
++#endif
+ 		char product[PROPERTY_VALUE_MAX];
+ 		property_set("sys.usb.config", "none");
+ 		property_get("usb.vendor", vendor, "18D1");
