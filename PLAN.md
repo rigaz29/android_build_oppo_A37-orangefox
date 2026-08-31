@@ -143,6 +143,84 @@ perangkat, bukan diambil sendiri.
 
 ---
 
+## 1c. Fase 0 — hasil percobaan 31 Agustus, dan temuan yang mengubah perhitungan
+
+Ruang dikosongkan, lalu **dikembalikan lagi** atas permintaan pemilik perangkat.
+Sync OrangeFox belum dijalankan. Yang berikut tercatat supaya percobaan berikutnya
+tidak mengulang perhitungan yang sama.
+
+### Rincian /root/los23 saat itu
+
+```
+total       258 GB
+.repo        85 GB   <- penyimpanan objek git; memungkinkan pemulihan LOKAL
+out          82 GB
+prebuilts    50 GB
+sumber lain  42 GB   <- yang dihapus (35 GB efektif setelah kernel/ dikecualikan)
+```
+
+Dihapus: `cts developers development device external frameworks hardware lineage
+packages system test toolchain tools vendor bionic art libcore build dalvik
+trusty bootable sdk platform_testing lineage-sdk pdk libnativehelper android`
+
+Dipertahankan di luar `.repo`/`out`/`prebuilts`/`share`: `kernel/` (4,6 GB,
+pekerjaan aktif) dan `kernel-out-adiantum`/`kernel-out-twrpadi` (825 MB, berisi
+`Image` yang sudah terbangun).
+
+Hasil: **21 GB → 57 GB**. Cukup untuk `fox_12.1` (butuh ≥ 45 GB) dengan margin.
+
+### Pemulihan tanpa unduh
+
+Karena seluruh yang dihapus repo-managed, `repo sync -l` mengembalikannya dari
+`.repo` tanpa menyentuh jaringan. Diverifikasi sebelum menghapus: `packages/`
+memuat 168 proyek repo (pemeriksaan `.git` sedalam 2 tingkat sempat menyesatkan —
+`.git`-nya di tingkat 3).
+
+### ⚠️ TEMUAN: mempertahankan `out/` TIDAK menyelamatkan build inkremental
+
+Alasan mempertahankan `out/` (82 GB) adalah agar build ROM berikutnya tidak dari
+nol. **Itu kemungkinan besar tidak tercapai**, dan sebaiknya diketahui sebelum
+memutuskan hal serupa lagi.
+
+Ninja membandingkan mtime sumber terhadap keluaran:
+
+```
+keluaran out/boot.img              2026-08-30 17:46
+sumber sebelum dihapus             2026-08-22 08:33
+sumber setelah repo sync -l        = waktu checkout (lebih baru dari keduanya)
+```
+
+Sumber yang dipulihkan mendapat mtime **sekarang**, jadi lebih baru dari seluruh
+isi `out/`. Ninja menganggap semuanya berubah dan membangun ulang. `ccache` tidak
+menolong: hanya 185 MB, jauh di bawah kebutuhan satu build ROM penuh.
+
+Konsekuensinya untuk keputusan berikutnya: kalau sumber akan dihapus-lalu-dipulihkan,
+`out/` adalah **82 GB yang tersimpan tanpa memberi manfaat yang diharapkan**. Ia
+kandidat pertama yang bisa dilepas, dengan syarat menyelamatkan dulu:
+
+```
+out/target/product/A37/boot.img       <- basis kemas ulang kernel
+out/target/product/A37/recovery.img
+```
+
+(ROM zip sudah ada di `share/`.)
+
+### Prasyarat yang harus diamankan SEBELUM menghapus sumber
+
+Bukan teori — dilakukan pada percobaan ini:
+
+```
+kernel branch `workingset` (46 commit)   didorong ke gh sebelum penghapusan
+device/oppo/A37                          diverifikasi bersih dan sepadan
+                                         dengan gh/lineage-23 (b3ad23dc)
+```
+
+Menghapus pohon kerja repo-managed **tidak** menghilangkan commit — objeknya di
+`.repo/projects/*.git`. Tetapi memverifikasi lebih dulu jauh lebih murah daripada
+menemukan sesudahnya.
+
+---
+
 ## 2. Fakta yang sudah diverifikasi
 
 | | |
