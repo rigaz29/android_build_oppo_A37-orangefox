@@ -54,6 +54,95 @@ yang dicari sekadar ramoops secepatnya. Kalau tujuannya diagnosis mendesak, kerj
 
 ---
 
+## 1b. ⚠️ KOREKSI 31 Agustus 2026 — empat fakta di bawah sudah TIDAK berlaku
+
+Rencana ini ditulis 12 Agustus, sebelum seluruh pekerjaan TWRP 12.1, FBE, dan
+Adiantum. Baca seksi ini lebih dulu; sebagian §2 di bawahnya sudah usang.
+
+### a. `/data` SEKARANG TERENKRIPSI — §2.1 terbalik
+
+```
+plan      : /data A37 kita TIDAK terenkripsi (fstab tanpa encryptable=)
+kenyataan : ro.crypto.type=file
+            fileencryption=adiantum:adiantum:v1
+```
+
+Ini membatalkan tiga kesimpulan sekaligus:
+
+- **`fox_11.0` TIDAK lagi sama sahnya dengan `fox_12.1`.** Alasan §2.1 memilih
+  keduanya setara adalah "tidak ada dekripsi untuk digagalkan". Sekarang ada, dan
+  OrangeFox harus bisa membuka FBE Adiantum. `fox_12.1` menjadi **wajib**, bukan
+  sekadar disarankan.
+- `OF_DEFAULT_KEYMASTER_VERSION` dan `TW_INCLUDE_CRYPTO` yang dicoret di §2
+  harus dinilai ulang.
+- "Dukungan enkripsi — sengaja tidak dikerjakan" di §5 sudah tidak berlaku.
+
+Prasyarat kernelnya sudah ada: `FS_POLICY_FLAG_DIRECT_KEY` (commit
+`b4799b06c556`), karena libfscrypt selalu menyalakan flag itu untuk Adiantum.
+Recovery tanpa commit tersebut akan ditolak `-EINVAL`.
+
+### b. Kernel yang dipakai berubah
+
+```
+plan      : 18.327.160 B  sha256 be170546...  (kernel LOS 21)
+sekarang  : 18.483.896 B  sha256 1af505f3...  (branch twrp-12.1-adiantum,
+                                               commit f43ae9632fe7)
+```
+
+Isinya: AIO FunctionFS (adb+MTP berdampingan), f2fs 201 commit, cipher Adiantum
++ NEON arm64, mode fscrypt, dan DIRECT_KEY. Seluruh verifikasi sha256 di Fase 3
+harus memakai angka baru ini.
+
+### c. Sumber device tree berubah — jangan lagi dari TeamWin android-9.0
+
+§3 Fase 1 menyuruh menyalin `TeamWin/android_device_oppo_A37f` `android-9.0` lalu
+mengadaptasinya. **Jangan.** Sekarang sudah ada device tree TWRP 12.1 yang
+TERBUKTI JALAN di perangkat, lengkap dengan blob vendor untuk dekripsi:
+
+```
+repo   : rigaz29/android_build_oppo_A37-twrp
+jalur  : device/oppo/A37f/   (tanpa prebuilt/, lihat README repo itu)
+```
+
+Nilai yang sudah terbukti di sana, bukan lagi dugaan:
+
+```
+BoardConfig.mk:60  BOARD_RAMDISK_OFFSET := 0x02000000   <- §2.2a sudah TERBUKTI
+BoardConfig.mk:58  BOARD_KERNEL_PAGESIZE := 2048
+BoardConfig.mk:57  cmdline lengkap dengan enam parameter ramoops.*
+```
+
+### d. Risiko terbesar plan ini SUDAH GUGUR
+
+§4 menandai ini sebagai asumsi terbesar:
+
+> "Userspace Android 11/12 di kernel 3.10 — ⚠️ BELUM terbukti ... Ini asumsi
+> terbesar plan ini"
+
+**Sudah terbukti.** TWRP 12.1 (userspace Android 12) berjalan di kernel 3.10 ini:
+UI tampil, sentuh normal, adb dan MTP hidup bersamaan, dan FBE Adiantum
+terdekripsi dengan PIN. Log recovery menunjukkan kunci DE dan CE dua-duanya
+terpasang.
+
+Artinya OrangeFox `fox_12.1` berdiri di atas fondasi yang sudah diuji, bukan
+taruhan.
+
+### e. Ruang disk — kendala yang berubah arah
+
+```
+plan      : tersedia 35 GB; Fase 0 mengosongkan 77 GB dari /root/los21/out
+sekarang  : tersedia 21 GB
+            /root/los23/out   82 GB  (ROM sudah tersalin ke share/)
+            /root/twrp12      14 GB  (prebuilts & out sudah dihapus; pohon ini
+                                      sudah tidak bisa membangun apa pun tanpa
+                                      repo sync ulang)
+```
+
+`fox_12.1` butuh ≥ 45 GB. Keputusan apa yang dikosongkan ada di pemilik
+perangkat, bukan diambil sendiri.
+
+---
+
 ## 2. Fakta yang sudah diverifikasi
 
 | | |
