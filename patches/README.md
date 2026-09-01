@@ -111,3 +111,102 @@ pruneFiles := []string{".out-dir", ".find-ignore"}
 ```
 
 Reversibel: tukar nama direktori untuk kembali membangun TWRP.
+
+---
+
+# BELUM DIUJI
+
+Semua di atas terverifikasi di perangkat. Yang di bawah ini **tidak**.
+
+## `BELUM-DIUJI-recreate-media-folder-fbe.diff` — `/sdcard` kosong setelah format data
+
+**Status: belum pernah dikompilasi, belum pernah dijalankan di perangkat.**
+Pohon build OrangeFox dihapus untuk memberi ruang build ROM, jadi menguji
+tambalan ini berarti `repo sync` ulang berjam-jam. Jangan anggap ini selesai.
+
+### Gejala
+
+Setelah format `/data`, berkas yang disalin dari PC lewat MTP tidak muncul di
+file manager OrangeFox. Reboot ke recovery tidak menolong. Di PC berkasnya
+terlihat, dan penyalinan dilaporkan berhasil.
+
+### Sebab, ditelusuri di perangkat
+
+Berkas tidak hilang — ia mendarat di `/data/media`, sedangkan file manager
+membaca `/sdcard` yang masih direktori tmpfs kosong.
+
+`/tmp/recovery.log` saat gejala muncul:
+
+```
+Storage_Path: /data/media
+Symlink_Path: /data/media  ->  Symlink_Mount_Point: /sdcard
+I:[MTP] mtppipe add storage 65537 '/data/media'
+```
+
+`mount | grep sdcard` kosong — bind-nya tidak pernah aktif.
+
+Rantainya:
+
+1. Format `/data` menyisakan partisi kosong; `/data/media` pun tidak ada
+2. TWRP mount `/data`, mencoba bind `/data/media` -> `/sdcard`, GAGAL karena
+   sumbernya tidak ada
+3. `Recreate_Media_Folder()` berhenti di `if (Is_FBE) return` -- tidak membuat
+   apa pun
+4. `Setup_Data_Media()` tidak menemukan `/data/media/0`, jadi `Storage_Path`
+   tetap `/data/media` (upgrade ke `/0` bersyarat `Path_Exists`)
+5. MTP mengekspor `Storage_Path`; file manager membaca `/sdcard` yang kosong
+
+Langkah 2 gagal lagi setiap boot, itulah kenapa reboot tidak menolong.
+
+### Kenapa `TW_INTERNAL_STORAGE_PATH` TIDAK menolong
+
+Dugaan pertama yang salah. `mkdir(EXPAND(TW_INTERNAL_STORAGE_PATH))` memang ada
+di `Recreate_Media_Folder()`, tetapi **setelah** `if (Is_FBE) return` -- jadi
+pada A37 baris itu tidak pernah tercapai. Menambahkannya ke BoardConfig sia-sia.
+Diperiksa di sumber, bukan diduga.
+
+### Kenapa hulu sengaja melewatkannya
+
+Pada FBE, `/data/media/0` adalah direktori terenkripsi kunci CE, dan kebijakan
+fscrypt hanya bisa dipasang pada direktori **kosong**. Membuatnya dari recovery
+-- apalagi mengisinya dengan zip ROM -- membuat `vold` gagal memasang kebijakan
+saat ROM pertama kali boot. Jadi jangan pernah membuat `/data/media/0` di sini.
+
+### Yang diubah tambalan ini
+
+Membuat **induknya saja**, `/data/media`, yang tidak terenkripsi, lalu mengulang
+bind. `/data/media/0` tetap diserahkan kepada Android saat boot pertama, persis
+maksud hulu.
+
+### Bukti bahwa perbaikannya menyasar hal yang benar
+
+Setelah `mkdir -p /data/media/0` dan reboot recovery secara manual, TWRP langsung
+memilih jalur yang benar:
+
+```
+Symlink_Path: /data/media/0
+Storage_Path: /data/media/0
+I:Backup folder set to '/data/media/0/Fox/BACKUPS/23bb7d0'
+```
+
+Ini membuktikan mekanisme deteksinya, bukan membuktikan tambalannya.
+
+### Yang masih harus dikerjakan sebelum ini boleh dipercaya
+
+1. Terapkan pada pohon `bootable/recovery` **OrangeFox** -- diff ini dibuat
+   terhadap TeamWin android-12.1, dan sumber OrangeFox tidak bisa diambil saat
+   itu (GitHub 404, GitLab tidak menjawab). Konteksnya mungkin bergeser.
+2. Kompilasi.
+3. Uji urutan sebenarnya: format data -> salin berkas lewat MTP -> pastikan
+   muncul di file manager.
+4. Pastikan ROM tetap boot setelahnya, yaitu `vold` berhasil memasang kebijakan
+   fscrypt pada `/data/media/0` yang ia buat sendiri.
+
+### Workaround selama belum diuji
+
+Masalahnya hanya muncul setelah format data. Sesudah dijalankan sekali, tidak
+kambuh sampai format berikutnya:
+
+```sh
+adb shell "mkdir -p /data/media/0 && mount --bind /data/media/0 /sdcard"
+```

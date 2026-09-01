@@ -1,0 +1,38 @@
+# BELUM DIUJI -- belum pernah dikompilasi, belum pernah dijalankan di perangkat.
+# Baca seksi "BELUM DIUJI" di README.md sebelum memakai.
+#
+# Dibuat terhadap partition.cpp TeamWin android-12.1. Pohon bootable/recovery
+# OrangeFox BERBEDA (lihat catatan partitionmanager.cpp yang beda 1971 baris),
+# jadi periksa konteksnya sebelum menerapkan; kalau ditolak, kerjakan manual.
+--- a/partition.cpp
++++ b/partition.cpp
+@@ -3229,7 +3229,28 @@
+ 	string Media_Path = Mount_Point + "/media";
+ 
+ 	if (Is_FBE) {
+-		LOGINFO("Not recreating media folder on FBE\n");
++		// Hulu berhenti di sini supaya /data/media/0 -- direktori terenkripsi
++		// kunci CE -- tidak dibuat dari recovery: kebijakan fscrypt hanya bisa
++		// dipasang pada direktori KOSONG, jadi membuatnya lebih dulu (apalagi
++		// mengisinya) membuat vold gagal saat ROM pertama kali boot.
++		//
++		// Tetapi INDUKNYA, /data/media, tidak terenkripsi. Tanpa induk itu,
++		// bind /data/media -> /sdcard gagal saat /data di-mount, sehingga
++		// /sdcard tetap direktori tmpfs kosong sementara MTP mengekspor
++		// Storage_Path (/data/media). Berkas yang disalin dari PC mendarat di
++		// tempat yang tidak pernah dibaca file manager.
++		//
++		// Buat induknya saja, lalu ulangi bind. /data/media/0 tetap diserahkan
++		// kepada Android, persis maksud hulu.
++		if (Mount(true) && !TWFunc::Path_Exists(Media_Path)) {
++			LOGINFO("FBE: membuat %s (induk, tidak terenkripsi) agar bind /sdcard berhasil.\n", Media_Path.c_str());
++			mkdir(Media_Path.c_str(), 0770);
++			tw_set_default_metadata(Media_Path.c_str());
++			PartitionManager.UnMount_By_Path(Symlink_Mount_Point, true);
++			PartitionManager.Mount_By_Path(Symlink_Mount_Point, true);
++		} else {
++			LOGINFO("Not recreating media folder on FBE\n");
++		}
+ 		return;
+ 	}
+ 	if (!Mount(true)) {
